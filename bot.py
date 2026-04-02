@@ -1,4 +1,4 @@
-import os, threading, http.server, socketserver, yt_dlp, time
+import os, threading, http.server, socketserver, yt_dlp, time, random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -42,7 +42,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎧 Senin için grubu şenlendirmeye geldim.\n\n"
         f"🎨 `/ciz` - Hayalini resme dök\n"
         f"🎵 `/cal` - Müzik/Video Player\n"
-        f"📥 `/mp3` - YouTube MP3 İndir\n"
         f"📊 `/istatistik` - Grup Raporu\n\n"
         f"✨ *Kurucu:* **Alperen KAYA**"
     )
@@ -51,12 +50,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_stats("ciz")
     p = "+".join(context.args)
-    if not p: return await update.message.reply_text("🤔 **Ne çizmemi istersin?**", parse_mode='Markdown')
+    if not p: 
+        return await update.message.reply_text("🤔 **Ne çizmemi istersin?**", parse_mode='Markdown')
+    
     m = await update.message.reply_text("🎨 **Hayalin fırçaya dökülüyor...**")
+    
+    # Resim hatasını çözen kısım (Seed ve Parametreler)
+    seed = random.randint(1, 999999)
+    image_url = f"https://pollinations.ai/p/{p}?width=1024&height=1024&seed={seed}"
+    
     try:
-        await update.message.reply_photo(f"https://pollinations.ai/p/{p}", caption=f"✨ İşte sonucun: *{p}*", parse_mode='Markdown')
-    except:
-        await update.message.reply_text("❌ Resim oluşturulamadı.")
+        await update.message.reply_photo(
+            photo=image_url, 
+            caption=f"✨ İşte sonucun: *{p.replace('+', ' ')}*", 
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text("❌ Resim oluşturulurken bir sorun çıktı.")
+    
     await m.delete()
 
 async def cal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,10 +111,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Selam kanka **{update.message.from_user.first_name}**! 🍻", parse_mode='Markdown')
 
 if __name__ == '__main__':
-    # Web sunucusunu başlat
+    # Web sunucusunu daemon olarak başlat
     threading.Thread(target=run_web_server, daemon=True).start()
     
-    # Botu kur
+    # Bot kurulumu
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('ciz', ciz))
