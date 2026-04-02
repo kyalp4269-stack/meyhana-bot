@@ -1,10 +1,11 @@
-import os, threading, http.server, socketserver, yt_dlp, time, random
+import os, threading, http.server, socketserver, yt_dlp, time, random, requests
+from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # --- 1. MADDE: ADMIN VE AYARLAR ---
 TOKEN = '8775448432:AAEI553SIDjcBZuTfrX6jpFSswVGbZzS7f8'
-ADMIN_ID = 6363063544  # Kendi Telegram ID'ni buraya yazabilirsin
+ADMIN_ID = 6363063544 
 
 settings = {
     "total_messages": 0,
@@ -55,18 +56,25 @@ async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     m = await update.message.reply_text("🎨 **Hayalin fırçaya dökülüyor...**")
     
-    # Resim hatasını çözen kısım (Seed ve Parametreler)
+    # Siyah logo sorununu kökten çözen "İndir ve Gönder" sistemi
     seed = random.randint(1, 999999)
-    image_url = f"https://pollinations.ai/p/{p}?width=1024&height=1024&seed={seed}"
+    image_url = f"https://pollinations.ai/p/{p}?width=1024&height=1024&seed={seed}&nologo=true"
     
     try:
-        await update.message.reply_photo(
-            photo=image_url, 
-            caption=f"✨ İşte sonucun: *{p.replace('+', ' ')}*", 
-            parse_mode='Markdown'
-        )
+        # Resmi arka planda indiriyoruz
+        response = requests.get(image_url, timeout=15)
+        if response.status_code == 200:
+            image_file = BytesIO(response.content)
+            # Resmi link olarak değil, DOSYA olarak gönderiyoruz (Logo çıkmaz)
+            await update.message.reply_photo(
+                photo=image_file, 
+                caption=f"✨ İşte sonucun: *{p.replace('+', ' ')}*", 
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text("❌ Resim servisi şu an meşgul, tekrar dene.")
     except Exception as e:
-        await update.message.reply_text("❌ Resim oluşturulurken bir sorun çıktı.")
+        await update.message.reply_text("❌ Bir hata oluştu, resim gönderilemedi.")
     
     await m.delete()
 
@@ -111,10 +119,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Selam kanka **{update.message.from_user.first_name}**! 🍻", parse_mode='Markdown')
 
 if __name__ == '__main__':
-    # Web sunucusunu daemon olarak başlat
     threading.Thread(target=run_web_server, daemon=True).start()
-    
-    # Bot kurulumu
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('ciz', ciz))
