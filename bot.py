@@ -24,118 +24,95 @@ def run_web_server():
     with socketserver.TCPServer(("", PORT), MyHandler) as httpd:
         httpd.serve_forever()
 
-def track_stats(command):
-    settings["command_usage"][command] = settings["command_usage"].get(command, 0) + 1
-
-# --- YARDIMCI FONKSİYONLAR (İndirme İşlemi) ---
-def download_audio(query):
-    # Eğer sorgu link değilse YouTube'da ara
+# --- İNDİRME MOTORU ---
+def download_content(query, is_video=False):
     if not query.startswith("http"):
         query = f"ytsearch1:{query}"
     
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if is_video else 'bestaudio/best',
         'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
         'quiet': True,
         'no_warnings': True,
     }
     
+    if not is_video:
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(query, download=True)
-        # Liste ise ilk öğeyi al (arama sonuçları için)
-        if 'entries' in info:
-            info = info['entries'][0]
-        
+        if 'entries' in info: info = info['entries'][0]
         filename = ydl.prepare_filename(info)
-        # Uzantıyı mp3 olarak düzeltiyoruz çünkü postprocessor çeviriyor
-        base, _ = os.path.splitext(filename)
-        mp3_filename = base + ".mp3"
-        return mp3_filename, info.get('title', 'Ses Dosyası')
+        
+        if not is_video:
+            base, _ = os.path.splitext(filename)
+            filename = base + ".mp3"
+            
+        return filename, info.get('title', 'Dosya')
 
 # --- KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_stats("start")
     user = update.effective_user
-    welcome_text = (
-        f"┏━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"     ✨ **MEYHANAFM V2.5** ✨\n"
-        f"┗━━━━━━━━━━━━━━━━━━━━┛\n\n"
-        f"👋 Selam **{user.first_name}**, hoş geldin!\n\n"
-        f"🎵 `/cal [isim/link]` - Müzik İndir & Dinle\n"
-        f"📥 `/mp3 [link]` - YouTube MP3 İndir\n"
-        f"📊 `/istatistik` - Bot Raporu\n\n"
-        f"🍻 *Gruba link atman yeterli, gerisini bana bırak!*"
+    text = (
+        f"✨ **MEYHANAFM V3.0** ✨\n\n"
+        f"🎵 `/cal` veya `/mp3` - Şarkıyı gruba atar\n"
+        f"🎥 `/video` - Videoyu gruba atar (Telegram'da izle)\n"
+        f"📊 `/istatistik` - Bot Durumu\n\n"
+        f"🍻 **Sadece link atman da yeterli!**"
     )
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-async def cal_ve_indir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def medya_isleyici(update: Update, context: ContextTypes.DEFAULT_TYPE, is_video=False):
     query = " ".join(context.args)
-    if not query:
-        return await update.message.reply_text("🎵 **Hangi şarkıyı indirmemi istersin?**")
+    if not query and update.message.text: 
+        query = update.message.text # Komutsuz link atıldıysa
     
-    m = await update.message.reply_text("📥 **MeyhanaFM senin için hazırlıyor...**")
+    if not query: return
     
+    m = await update.message.reply_text("📥 **MeyhanaFM indiriyor, bekle kanka...**")
     try:
-        # İndirme klasörü yoksa oluştur
-        if not os.path.exists('downloads'):
-            os.makedirs('downloads')
-            
-        file_path, title = download_audio(query)
+        if not os.path.exists('downloads'): os.makedirs('downloads')
+        file_path, title = download_content(query, is_video)
         
-        with open(file_path, 'rb') as audio:
-            await update.message.reply_audio(
-                audio=audio, 
-                title=title, 
-                caption=f"✅ **{title}** hazır! Keyifli dinlemeler. 🍻",
-                parse_mode='Markdown'
-            )
+        with open(file_path, 'rb') as f:
+            if is_video:
+                await update.message.reply_video(video=f, caption=f"🎬 **{title}**")
+            else:
+                await update.message.reply_audio(audio=f, title=title, caption="🍻 Şerefe!")
         
-        # Dosyayı gönderdikten sonra sil (Render hafızası dolmasın)
         os.remove(file_path)
         await m.delete()
-        
     except Exception as e:
-        print(f"Hata: {e}")
-        await m.edit_text("❌ **Üzgünüm, bu içeriği indiremedim.**")
+        await m.edit_text(f"❌ **Hata:** Sunucuda `ffmpeg` eksik olabilir veya link hatalı.")
 
 async def istatistik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = int((time.time() - settings["start_time"]) / 60)
-    await update.message.reply_text(f"📊 **MEYHANAFM DURUM**\n📩 Mesaj: `{settings['total_messages']}`\n⏱ Uptime: `{uptime} dk`", parse_mode='Markdown')
+    await update.message.reply_text(f"📊 Mesaj: `{settings['total_messages']}` | Uptime: `{uptime} dk`", parse_mode='Markdown')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
-    text = update.message.text
     settings["total_messages"] += 1
+    text = update.message.text
     
-    # Eğer mesaj bir YouTube linki içeriyorsa otomatik indir
     if "youtube.com/" in text or "youtu.be/" in text:
-        # Komutsuz direkt link atıldığında cal_ve_indir fonksiyonunu tetikle
-        context.args = [text]
-        await cal_ve_indir(update, context)
-    
+        await medya_isleyici(update, context, is_video=False) # Otomatik MP3
     elif "selam" in text.lower():
-        await update.message.reply_text(f"Selam kanka **{update.message.from_user.first_name}**! 🍻", parse_mode='Markdown')
+        await update.message.reply_text(f"Selam **{update.message.from_user.first_name}**! 🍻", parse_mode='Markdown')
 
 if __name__ == '__main__':
-    # Klasör kontrolü
-    if not os.path.exists('downloads'):
-        os.makedirs('downloads')
-        
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('cal', cal_ve_indir))
-    app.add_handler(CommandHandler('mp3', cal_ve_indir))
+    app.add_handler(CommandHandler('cal', lambda u, c: medya_isleyici(u, c, False)))
+    app.add_handler(CommandHandler('mp3', lambda u, c: medya_isleyici(u, c, False)))
+    app.add_handler(CommandHandler('video', lambda u, c: medya_isleyici(u, c, True)))
     app.add_handler(CommandHandler('istatistik', istatistik))
-    
-    # Hem komutları hem de normal mesajları (linkleri) dinle
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
