@@ -1,4 +1,4 @@
-import os, threading, http.server, socketserver, yt_dlp, time, requests
+import os, threading, http.server, socketserver, yt_dlp, time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -16,97 +16,68 @@ def run_web_server():
     with socketserver.TCPServer(("", PORT), MyHandler) as httpd:
         httpd.serve_forever()
 
-# --- GELİŞMİŞ İNDİRME FONKSİYONU ---
-def download_media(query, is_video=False):
+# --- VİDEO İNDİRME MOTORU ---
+def download_video_file(url):
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
 
-    # Eğer link değilse YouTube'da ara
-    if not query.startswith("http"):
-        query = f"ytsearch1:{query}"
-
     ydl_opts = {
-        # Video ise 720p veya altını seç (Dosya boyutu 50MB'ı geçmesin diye)
-        'format': 'best[ext=mp4][filesize<50M]/bestaudio[ext=m4a]/best' if is_video else 'bestaudio/best',
+        # Telegram'da oynatılması için mp4 formatı ve 480p/720p sınırı (Boyut çok büyümesin diye)
+        'format': 'best[ext=mp4][filesize<50M]/bestaudio[ext=m4a]/best',
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
     }
 
-    if not is_video:
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(query, download=True)
-        if 'entries' in info:
-            info = info['entries'][0]
-        
+        info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
-        
-        if not is_video:
-            base, _ = os.path.splitext(filename)
-            filename = base + ".mp3"
-            
-        return filename, info.get('title', 'Medya')
+        return filename, info.get('title', 'Video Sahnesi')
 
 # --- KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "✨ **MEYHANAFM V3.5** ✨\n\n"
-        "🎵 `/cal` - MP3 gönderir\n"
-        "🎥 `/video` - Video gönderir (Telegram'da izle)\n"
-        "📊 `/istatistik` - Durum raporu\n\n"
-        "🍻 Link atman yeterli, otomatik MP3 yaparım!"
+        "🎬 **MEYHANAFM VİDEO PLAYER**\n\n"
+        "📺 Bir YouTube linki at, direkt burada oynatalım!\n"
+        "🎥 Komutla kullanmak için: `/video [link]`"
     )
 
-async def handles(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Komut mu yoksa direkt mesaj/link mi kontrol et
-    is_video = False
-    if update.message.text.startswith('/video'):
-        is_video = True
-        query = " ".join(context.args)
-    elif update.message.text.startswith(('/cal', '/mp3')):
-        query = " ".join(context.args)
-    else:
-        query = update.message.text # Direkt link atıldıysa
+async def video_gonder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Eğer komutla (/video ...) geldiyse args kullan, yoksa direkt mesaj metnini al
+    url = " ".join(context.args) if context.args else update.message.text
 
-    if not query: return
+    if not ("youtube.com/" in url or "youtu.be/" in url):
+        return # YouTube linki değilse işlem yapma
 
-    m = await update.message.reply_text("⏳ **İşlem başladı, meyhaneci hazırlıyor...**")
+    m = await update.message.reply_text("📥 **Sahne hazırlanıyor, Telegram'a yükleniyor...**")
     
     try:
-        file_path, title = download_media(query, is_video)
+        file_path, title = download_video_file(url)
         
-        if not os.path.exists(file_path):
-            raise Exception("Dosya oluşturulamadı.")
-
-        with open(file_path, 'rb') as f:
-            if is_video:
-                await update.message.reply_video(video=f, caption=f"🎬 **{title}**\n@MeyhanaFM_bot")
-            else:
-                await update.message.reply_audio(audio=f, title=title)
+        with open(file_path, 'rb') as video_file:
+            # Burası videoyu Telegram içinde oynatılacak şekilde gönderen kısım
+            await update.message.reply_video(
+                video=video_file, 
+                caption=f"🎬 **{title}**\n\n🍻 Keyifli seyirler kanka!",
+                supports_streaming=True # Video inerken izlenebilmesini sağlar
+            )
         
-        os.remove(file_path) # Temizlik
+        os.remove(file_path) # Sunucuda yer kaplamasın diye sil
         await m.delete()
 
     except Exception as e:
-        print(f"HATA: {e}")
-        await m.edit_text(f"❌ **Hata oluştu!**\n\nOlası Sebepler:\n1. Dosya 50MB'dan büyük.\n2. Sunucuda FFmpeg yüklü değil.\n3. YouTube botu engelledi.")
+        print(f"Hata: {e}")
+        await m.edit_text("❌ **Hata:** Video çok büyük olabilir (50MB sınırı) veya link hatalı.")
 
 if __name__ == '__main__':
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('cal', handles))
-    app.add_handler(CommandHandler('mp3', handles))
-    app.add_handler(CommandHandler('video', handles))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handles))
+    app.add_handler(CommandHandler('video', video_gonder))
+    # Link atıldığında otomatik yakalaması için:
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), video_gonder))
     
     app.run_polling()
