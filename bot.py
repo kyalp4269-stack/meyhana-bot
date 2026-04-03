@@ -1,5 +1,4 @@
 import os, threading, http.server, socketserver, yt_dlp, time, random, requests
-from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -28,6 +27,36 @@ def run_web_server():
 def track_stats(command):
     settings["command_usage"][command] = settings["command_usage"].get(command, 0) + 1
 
+# --- YARDIMCI FONKSİYONLAR (İndirme İşlemi) ---
+def download_audio(query):
+    # Eğer sorgu link değilse YouTube'da ara
+    if not query.startswith("http"):
+        query = f"ytsearch1:{query}"
+    
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(query, download=True)
+        # Liste ise ilk öğeyi al (arama sonuçları için)
+        if 'entries' in info:
+            info = info['entries'][0]
+        
+        filename = ydl.prepare_filename(info)
+        # Uzantıyı mp3 olarak düzeltiyoruz çünkü postprocessor çeviriyor
+        base, _ = os.path.splitext(filename)
+        mp3_filename = base + ".mp3"
+        return mp3_filename, info.get('title', 'Ses Dosyası')
+
 # --- KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,55 +64,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_text = (
         f"┏━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"     ✨ **MEYHANAFM V2.0** ✨\n"
+        f"     ✨ **MEYHANAFM V2.5** ✨\n"
         f"┗━━━━━━━━━━━━━━━━━━━━┛\n\n"
         f"👋 Selam **{user.first_name}**, hoş geldin!\n\n"
-        f"🎨 `/ciz` - Hayalini resme dök\n"
-        f"🎵 `/cal` - Müzik/Video Player\n"
-        f"📥 `/mp3` - YouTube MP3 İndir\n"
-        f"📊 `/istatistik` - Grup Raporu\n\n"
-        f"✨ *Kurucu:* **Alperen KAYA**"
+        f"🎵 `/cal [isim/link]` - Müzik İndir & Dinle\n"
+        f"📥 `/mp3 [link]` - YouTube MP3 İndir\n"
+        f"📊 `/istatistik` - Bot Raporu\n\n"
+        f"🍻 *Gruba link atman yeterli, gerisini bana bırak!*"
     )
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
-async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_stats("ciz")
-    p = "+".join(context.args)
-    if not p: return await update.message.reply_text("🤔 **Ne çizmemi istersin?**")
+async def cal_ve_indir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args)
+    if not query:
+        return await update.message.reply_text("🎵 **Hangi şarkıyı indirmemi istersin?**")
     
-    m = await update.message.reply_text("🎨 **Hayalin fırçaya dökülüyor...**")
-    seed = random.randint(1, 999999)
-    # URL'yi doğrudan göndermek yerine dosyayı indirip gönderiyoruz
-    image_url = f"https://pollinations.ai/p/{p}?width=1024&height=1024&seed={seed}&nologo=true"
+    m = await update.message.reply_text("📥 **MeyhanaFM senin için hazırlıyor...**")
     
     try:
-        response = requests.get(image_url, timeout=20)
-        if response.status_code == 200:
-            image_file = BytesIO(response.content)
-            await update.message.reply_photo(photo=image_file, caption=f"✨ Sonuç: *{p.replace('+', ' ')}*", parse_mode='Markdown')
-        else:
-            await update.message.reply_text("❌ Resim servisi yanıt vermedi.")
-    except:
-        await update.message.reply_text("❌ Bir hata oluştu.")
-    await m.delete()
-
-async def cal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_stats("cal")
-    s = " ".join(context.args)
-    if not s: return await update.message.reply_text("🎵 **Hangi şarkıyı arıyoruz?**")
-    
-    m = await update.message.reply_text("🔍 **MeyhanaFM Arşivi Taranıyor...**")
-    search_url = f"https://www.youtube.com/results?search_query={s.replace(' ', '+')}"
-    keyboard = [[InlineKeyboardButton("▶️ Oynat / Dinle", url=search_url)]]
-    await update.message.reply_text(f"🎵 **Parça:** `{s}`", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    await m.delete()
-
-async def mp3_indir(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_stats("mp3")
-    url = " ".join(context.args)
-    if not url: return await update.message.reply_text("❌ **YouTube linki vermen lazım!**")
-    # MP3 indirme linki (Geri eklendi)
-    await update.message.reply_text(f"📡 [Buraya Tıklayarak MP3 İndir](https://www.youtubepp.com/watch?v={url.split('=')[-1] if '=' in url else ''})", parse_mode='Markdown')
+        # İndirme klasörü yoksa oluştur
+        if not os.path.exists('downloads'):
+            os.makedirs('downloads')
+            
+        file_path, title = download_audio(query)
+        
+        with open(file_path, 'rb') as audio:
+            await update.message.reply_audio(
+                audio=audio, 
+                title=title, 
+                caption=f"✅ **{title}** hazır! Keyifli dinlemeler. 🍻",
+                parse_mode='Markdown'
+            )
+        
+        # Dosyayı gönderdikten sonra sil (Render hafızası dolmasın)
+        os.remove(file_path)
+        await m.delete()
+        
+    except Exception as e:
+        print(f"Hata: {e}")
+        await m.edit_text("❌ **Üzgünüm, bu içeriği indiremedim.**")
 
 async def istatistik(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = int((time.time() - settings["start_time"]) / 60)
@@ -91,18 +110,32 @@ async def istatistik(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
+    text = update.message.text
     settings["total_messages"] += 1
-    settings["users"].add(update.message.from_user.id)
-    if "selam" in update.message.text.lower():
+    
+    # Eğer mesaj bir YouTube linki içeriyorsa otomatik indir
+    if "youtube.com/" in text or "youtu.be/" in text:
+        # Komutsuz direkt link atıldığında cal_ve_indir fonksiyonunu tetikle
+        context.args = [text]
+        await cal_ve_indir(update, context)
+    
+    elif "selam" in text.lower():
         await update.message.reply_text(f"Selam kanka **{update.message.from_user.first_name}**! 🍻", parse_mode='Markdown')
 
 if __name__ == '__main__':
+    # Klasör kontrolü
+    if not os.path.exists('downloads'):
+        os.makedirs('downloads')
+        
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('ciz', ciz))
-    app.add_handler(CommandHandler('cal', cal))
-    app.add_handler(CommandHandler('mp3', mp3_indir))
+    app.add_handler(CommandHandler('cal', cal_ve_indir))
+    app.add_handler(CommandHandler('mp3', cal_ve_indir))
     app.add_handler(CommandHandler('istatistik', istatistik))
+    
+    # Hem komutları hem de normal mesajları (linkleri) dinle
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
     app.run_polling()
